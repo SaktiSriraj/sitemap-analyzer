@@ -14,7 +14,7 @@ def init_db():
     global client, db, company_collection
 
     # Get mongo connection uri from env
-    mongo_uri = os.environ.get('MONGO_URI')
+    mongo_uri = os.getenv('MONGO_URI')
 
     # Connect to the database
     client = MongoClient(mongo_uri)
