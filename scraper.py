@@ -4,7 +4,7 @@ from urllib.parse import urljoin, urlparse
 import time
 import random
 
-def extract_sitemap(url, max_retries=3):
+def extract_sitemap(url, max_retries=2):
     # Extract all navigable links from a website's homepage with retry logic.
     
     # List of common user agents to rotate
