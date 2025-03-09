@@ -97,34 +97,57 @@
             margin-top: 10px;
             overflow: auto;
         }
+        #completion {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #d4edda;
+            border-radius: 5px;
+            border-left: 4px solid #28a745;
+        }
+        #completion h2 {
+            color: #155724;
+            margin-top: 0;
+        }
+        #completion button {
+            background-color: #007bff;
+            margin-top: 15px;
+            max-width: 200px;
+        }
+        #completion button:hover {
+            background-color: #0069d9;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Website Sitemap Insights</h1>
         
-        <div class="info-box">
-            <p><strong>Instructions:</strong> Upload a CSV file with company names and websites to generate insights.</p>
-            <p>The CSV file must have columns named "Company" and "Website".</p>
-            <div class="sample">
-                Company,Website<br>
-                Example Inc,example.com<br>
-                Test Company,testcompany.com
+        <div id="mainContent">
+            <div class="info-box">
+                <p><strong>Instructions:</strong> Upload a CSV file with company names and websites to generate insights.</p>
+                <p>The CSV file must have columns named "Company" and "Website".</p>
+                <div class="sample">
+                    Company,Website<br>
+                    Example Inc,example.com<br>
+                    Test Company,testcompany.com
+                </div>
             </div>
-        </div>
-        
-        <div class="warning-box">
-            <p><strong>Note:</strong> Processing may take some time depending on the number of companies.</p>
-            <p>Please be patient and do not refresh the page while processing.</p>
-        </div>
-        
-        <form action="/process" method="post" enctype="multipart/form-data" onsubmit="return validateAndSubmit()">
-            <div class="form-group">
-                <label for="file">Upload CSV File:</label>
-                <input type="file" id="file" name="file" accept=".csv" required>
+            
+            <div class="warning-box">
+                <p><strong>Note:</strong> Processing may take some time depending on the number of companies.</p>
+                <p>Please be patient and do not refresh the page while processing.</p>
             </div>
-            <button type="submit" id="submitBtn">Process CSV</button>
-        </form>
+            
+            <form id="uploadForm" action="/process" method="post" enctype="multipart/form-data" onsubmit="return validateAndSubmit()">
+                <div class="form-group">
+                    <label for="file">Upload CSV File:</label>
+                    <input type="file" id="file" name="file" accept=".csv" required>
+                </div>
+                <button type="submit" id="submitBtn">Process CSV</button>
+            </form>
+        </div>
         
         <div id="loading">
             <div class="spinner"></div>
@@ -132,11 +155,80 @@
             <p id="progressText">Starting analysis...</p>
         </div>
         
+        <div id="completion">
+            <h2>Processing Complete!</h2>
+            <p>Your file has been processed successfully and the results have been downloaded.</p>
+            <p>The downloaded CSV contains the sitemap analysis and AI-generated insights for each company.</p>
+            <button onclick="resetForm()">Process Another File</button>
+        </div>
+        
         <div id="errorMessage" class="error-message"></div>
     </div>
 
     <script>
-        function validateAndSubmit() {
+        // Handle form submission in a way that allows us to show the completion screen
+        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            if (!validateForm()) {
+                e.preventDefault();
+                return false;
+            }
+            
+            // Show loading
+            document.getElementById('mainContent').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            
+            // Set up progress messages
+            startProgressMessages();
+            
+            // Use AJAX for form submission to handle the completion screen
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const xhr = new XMLHttpRequest();
+            
+            xhr.open('POST', '/process', true);
+            
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    // Create a temporary link to download the file
+                    const blob = new Blob([xhr.response], { type: 'text/csv' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = 'sitemap_analysis_results.csv';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    
+                    // Hide loading and show completion screen
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('completion').style.display = 'block';
+                } else {
+                    // Handle error
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('mainContent').style.display = 'block';
+                    
+                    const errorMessage = document.getElementById('errorMessage');
+                    errorMessage.textContent = "An error occurred while processing your file. Please try again.";
+                    errorMessage.style.display = "block";
+                }
+            };
+            
+            xhr.onerror = function() {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('mainContent').style.display = 'block';
+                
+                const errorMessage = document.getElementById('errorMessage');
+                errorMessage.textContent = "A network error occurred. Please check your connection and try again.";
+                errorMessage.style.display = "block";
+            };
+            
+            xhr.responseType = 'blob';
+            xhr.send(formData);
+        });
+        
+        function validateForm() {
             const fileInput = document.getElementById('file');
             const errorMessage = document.getElementById('errorMessage');
             
@@ -153,11 +245,19 @@
                 return false;
             }
             
-            // File seems valid, show loading state
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('submitBtn').disabled = true;
-            
-            // Simulate progress updates
+            // Clear any previous error
+            errorMessage.style.display = "none";
+            return true;
+        }
+        
+        function validateAndSubmit() {
+            // This function is used by the original onsubmit handler
+            // We've replaced it with the event listener above, but keeping 
+            // this for backwards compatibility
+            return validateForm();
+        }
+        
+        function startProgressMessages() {
             const progressText = document.getElementById('progressText');
             const messages = [
                 "Reading the CSV file...",
@@ -179,7 +279,20 @@
                 }
             }, 8000);
             
-            return true;
+            // Store the interval ID so we can clear it if needed
+            window.progressInterval = progressInterval;
+        }
+        
+        function resetForm() {
+            // Clear the file input
+            document.getElementById('file').value = '';
+            
+            // Hide completion screen and show the main content
+            document.getElementById('completion').style.display = 'none';
+            document.getElementById('mainContent').style.display = 'block';
+            
+            // Clear any existing error message
+            document.getElementById('errorMessage').style.display = 'none';
         }
     </script>
 </body>
