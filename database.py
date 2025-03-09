@@ -1,10 +1,14 @@
 import os
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
 # Mongodb connection and collection vars
 client = None
 db = None
 company_collection = None
+
+# Load the .env file
+load_dotenv()
 
 def init_db():
     global client, db, company_collection
