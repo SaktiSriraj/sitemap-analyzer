@@ -2,7 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
-def exract_sitemap(url):
+def extract_sitemap(url):
     # Extract all navigable links from a website's homepage
     try:
         if not url.startswith(('http://', 'https://')):
