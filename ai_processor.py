@@ -1,12 +1,12 @@
 import os
-import openai
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 # load the .env file
 load_dotenv()
 
-# setting up the openai api key
-openai.api_key = os.environ.get('OPENAI_API_KEY')
+# setting up the gemini api key
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
 def analyze_sitemap_with_ai(company_name, sitemap_urls):
 
@@ -26,17 +26,14 @@ Format the response as:
 - Potential Opportunities:
 """
     try:
-        #  call openai api
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a business analyst examining comapny website"},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        # extract and return the AI-generated insight
-        return response.choices[0].message.content
+         # Initialize the Gemini model
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Generate content using Gemini
+        response = model.generate_content(prompt)
+        
+        # Extract and return the AI-generated insight
+        return response.text
     
     except Exception as e:
         print(f"Error generating AI insights for {company_name}: {str(e)}")
