@@ -116,8 +116,10 @@ def extract_sitemap(url, max_total_time=25):
                     all_urls.append(full_url)
         except Exception as e:
             print(f"Error with HTML fallback scraping {base_domain}: {str(e)}")
+            # Simply log the error and continue - don't raise an exception
     
     # Return unique URLs, limited to 1000 if there are too many
+    # If no URLs were found, this will just return an empty list without raising an exception
     unique_urls = list(set(all_urls))
     if len(unique_urls) > 1000:
         print(f"Limiting results from {len(unique_urls)} to 1000 URLs")
@@ -205,10 +207,16 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
                 
     except requests.exceptions.Timeout:
         print(f"Timeout while processing sitemap {sitemap_url}")
+        # Just return empty list instead of raising exception
+        return []
     except requests.exceptions.ConnectionError:
         print(f"Connection error while processing sitemap {sitemap_url}")
+        # Just return empty list instead of raising exception
+        return []
     except Exception as e:
         print(f"Error processing sitemap {sitemap_url}: {str(e)}")
+        # Just return empty list instead of raising exception
+        return []
     
     # Limit the number of URLs to prevent memory issues
     if len(urls) > 500:
