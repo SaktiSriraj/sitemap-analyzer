@@ -5,17 +5,8 @@ import random
 from urllib.parse import urljoin, urlparse
 import time
 
-def extract_xml_sitemap(url, max_total_time=25):
-    """
-    Extract URLs from a website's XML sitemap with improved timeout handling.
+def extract_sitemap(url, max_total_time=25):
     
-    Args:
-        url (str): The base URL of the website (domain name)
-        max_total_time (int): Maximum total time allowed for all requests (seconds)
-        
-    Returns:
-        list: A list of URLs found in the sitemap
-    """
     # Track start time to enforce total time limit
     start_time = time.time()
     
@@ -134,18 +125,7 @@ def extract_xml_sitemap(url, max_total_time=25):
     return unique_urls
 
 def process_sitemap(sitemap_url, headers, start_time, max_total_time):
-    """
-    Process a sitemap URL and extract all page URLs with timeout handling.
     
-    Args:
-        sitemap_url (str): URL of the sitemap to process
-        headers (dict): HTTP headers to use for the request
-        start_time (float): When the overall process started
-        max_total_time (int): Maximum allowed time for all requests
-        
-    Returns:
-        list: URLs found in the sitemap
-    """
     # Check if we've already spent too much time
     if time.time() - start_time >= max_total_time:
         return []
