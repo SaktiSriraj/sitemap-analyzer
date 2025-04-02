@@ -1,12 +1,17 @@
 import os
 import pandas as pd
-from flask import Flask, request, send_file, render_template, redirect, url_for
+from flask import Flask, request, send_file, render_template, redirect, url_for, jsonify
 from io import BytesIO
 import time
 from dotenv import load_dotenv
 from scraper import extract_sitemap
 from ai_processor import analyze_sitemap_with_ai
 from database import init_db, store_company_data, get_company_data
+
+import threading
+import queue
+import uuid
+import json
 
 # Load environment variables
 load_dotenv()
@@ -16,6 +21,28 @@ app = Flask(__name__)
 
 # Initialize database connection
 init_db()
+
+# ADD JOB QUEUE AND RESULTS DICTIONARY
+job_queue = queue.Queue()
+results = {}
+
+def worker():
+    while True:
+        job_id, company_name, website_url = job_queue.get()
+        try:
+            result = process_company(company_name, website_url)
+            results[job_id] = {"status": "complete", "data": result}
+        except Exception as e:
+            print(f"Worker error processing {company_name}: {str(e)}")
+            results[job_id] = {"status": "error", "message": str(e)}
+        finally:
+            job_queue.task_done()
+
+# Start worker thread
+worker_count = 5
+for _ in range(worker_count):
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
 
 def process_company(company_name, website_url):
     
@@ -44,56 +71,137 @@ def process_company(company_name, website_url):
         'Insight from Prompt': insights
     }
 
-def process_csv(csv_file):
+def process_csv(csv_file, async_mode=True):
+    # Read CSV in Chunks to avoid loading everything into memory
+    chunk_size = 10
+    output_data = []
+    job_ids = []
 
-    # Read the input CSV
-    df = pd.read_csv(csv_file)
-
+    # Find column names first by reading just the header
+    header_df = pd.read_csv(csv_file, nrows=0)
     company_col = None
     website_col = None
-    
-    for col in df.columns:
+
+    for col in header_df.columns:
         if col.lower() == 'company':
             company_col = col
         elif col.lower() == 'website':
             website_col = col
     
-    # If we can't find exact matches, look for similar columns
+    # if we cannot find exact matches, look for similar columns
     if not company_col:
-        for col in df.columns:
-            if 'company' in col.lower() or 'name' in col.lower() or 'organization' in col.lower():
+        for col in header_df.columns:
+            if 'company' in col.lower() or'name' in col.lower() or 'organization' in col.lower():
                 company_col = col
                 break
-    
+
     if not website_col:
-        for col in df.columns:
+        for col in header_df.columns:
             if 'website' in col.lower() or 'url' in col.lower() or 'site' in col.lower():
                 website_col = col
                 break
     
     if not company_col or not website_col:
-        error_msg = f"Could not find required columns. Your CSV has these columns: {list(df.columns)}"
+        error_msg = f"Could not find required columns. Your CSV has these columns: {list(header_df.columns)}"
         print(error_msg)
         raise ValueError(error_msg)
     
-    # Prepare output data
-    output_data = []
+    # Reset file position
+    csv_file.seek(0)
+
+    # Chunk processing
+    for chunk in pd.read_csv(csv_file, chunksize=chunk_size):
+        for _, row in chunk.iterrows():
+            company_name = row[company_col]
+            website_url = row[website_col]
+
+            if async_mode:
+                # Queue for async processing
+                job_id = f"job_{uuid.uuid4()}"
+                job_queue.put((job_id, company_name, website_url))
+                job_ids.append(job_id)
+
+                output_data.append({
+                    'Company': company_name,
+                    'Website': website_url,
+                    'Processing': 'Queued for processing',
+                    'Job ID': job_id
+                })
     
-    # Process each company
-    for _, row in df.iterrows():
-        company_name = row[company_col]
-        website_url = row[website_col]
-        
-        # Check if we already have data for this company
-        existing_data = get_company_data(company_name)
-        
-        # Process the company
-        result = process_company(company_name, website_url)
-        output_data.append(result)
-    
-    return output_data
+    return output_data, job_ids
 
 # Flask routes
+
+# Routes for async processing
+@app.route('/status')
+def all_jobs_status():
+    return jsonify(results)
+
+@app.route('/status/<job_id>')
+def job_status(job_id):
+    if job_id in results:
+        return jsonify(results[job_id])
+    else:
+        return jsonify({"status": "not found"})
+    
+@app.route('/results')
+def get_results():
+    # Check if all jobs are complete
+    completed_results = []
+    for job_id, result in results.items():
+        if result['status'] == 'complete' and 'data' in result:
+            completed_results.append(result['data'])
+    
+    # Create output CSV
+    output_df = pd.DataFrame(completed_results)
+
+    # Save to BytesIO
+    output_csv = BytesIO()
+    output_df.to_csv(output_csv, index=False)
+    output_csv.seek(0)
+
+    # Create in-memory file for download
+    return send_file(
+        output_csv,
+        mimetype='text/csv',
+        download_name='sitemap_analysis_results.csv',
+        as_attachment=True
+    )
+
+@app.route('/health')
+def health_check():
+    # Check MongoDB Connection
+    try:
+        from database import db
+        db.command('ping')
+        mongo_status = 'OK'
+    except Exception as e:
+        mongo_status = f"error: {str(e)}"
+    
+    # Check AI Service
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+        model = genai.get_model('gemini-2.0-flash')
+        model.generate_content("test")
+        ai_status = 'OK'
+    except Exception as e:
+        ai_status = f"error: {str(e)}"
+    
+    # Check worker queue
+    queue_status = {
+        'queue_size': job_queue.qsize(),
+        'results_size': len(results)
+    }
+    status = {
+        'app':'running',
+        'mongo': mongo_status,
+        'ai_service': ai_status,
+        'job_queue': queue_status
+    }
+
+    return jsonify(status)
+        
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -101,34 +209,28 @@ def index():
 @app.route('/process', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
-        return redirect(request.url)
+        return jsonify({"error": "No file part"}), 400
     
     file = request.files['file']
     
     if file.filename == '':
-        return redirect(request.url)
+        return jsonify({"error": "No selected file"}), 400
     
     if file and file.filename.endswith('.csv'):
-        # Process the CSV
-        output_data = process_csv(file)
-        
-        # Create output CSV
-        output_df = pd.DataFrame(output_data)
-        
-        # Save to BytesIO instead of StringIO
-        output_csv = BytesIO()
-        output_df.to_csv(output_csv, index=False)
-        output_csv.seek(0)
-        
-        # Create in-memory file for download
-        return send_file(
-            output_csv,
-            mimetype='text/csv',
-            download_name='sitemap_analysis_results.csv',
-            as_attachment=True
-        )
+        try:
+            # Process the CSV and get job IDs
+            output_data, job_ids = process_csv(file, async_mode=True)
+            
+            # Return job IDs as JSON
+            return jsonify({
+                "status": "processing",
+                "job_ids": job_ids,
+                "message": f"Processing {len(job_ids)} companies"
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
     
-    return redirect(request.url)
+    return jsonify({"error": "Invalid file format. Please upload a CSV file."}), 400
 
 if __name__ == '__main__':
     # Run the app

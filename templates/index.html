@@ -118,6 +118,62 @@
         #completion button:hover {
             background-color: #0069d9;
         }
+        #downloadButtons {
+            margin-top: 20px;
+            display: none;
+        }
+        #downloadButtons button {
+            background-color: #007bff;
+            margin-bottom: 10px;
+        }
+        #downloadButtons button:hover {
+            background-color: #0069d9;
+        }
+        #jobStatus {
+            background-color: #e8f4f8;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+            display: none;
+        }
+        .status-bar {
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            overflow: hidden;
+            position: relative;
+        }
+        #progressBar {
+            height: 100%;
+            width: 0%;
+            background-color: #4CAF50;
+            border-radius: 5px;
+            transition: width 0.5s;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .progress-text {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            font-weight: bold;
+            color: #333;
+            line-height: 20px;
+            z-index: 1;
+            text-shadow: 0px 0px 2px rgba(255, 255, 255, 0.7);
+        }
+        .download-btn {
+            display: inline-block;
+            margin: 0 5px;
+        }
+        .template-link {
+            color: #0066cc;
+            text-decoration: underline;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -128,6 +184,7 @@
             <div class="info-box">
                 <p><strong>Instructions:</strong> Upload a CSV file with company names and websites to generate insights.</p>
                 <p>The CSV file must have columns named "Company" and "Website".</p>
+                <p>Need a template? <a href="#" class="template-link" onclick="downloadTemplate()">Download CSV template</a></p>
                 <div class="sample">
                     Company,Website<br>
                     Example Inc,example.com<br>
@@ -137,10 +194,11 @@
             
             <div class="warning-box">
                 <p><strong>Note:</strong> Processing may take some time depending on the number of companies.</p>
-                <p>Please be patient and do not refresh the page while processing.</p>
+                <p>This tool will analyze company websites, extract sitemaps, and generate AI insights about each business.</p>
+                <p>For large files, you can monitor progress and download results when complete.</p>
             </div>
             
-            <form id="uploadForm" action="/process" method="post" enctype="multipart/form-data" onsubmit="return validateAndSubmit()">
+            <form id="uploadForm">
                 <div class="form-group">
                     <label for="file">Upload CSV File:</label>
                     <input type="file" id="file" name="file" accept=".csv" required>
@@ -151,82 +209,258 @@
         
         <div id="loading">
             <div class="spinner"></div>
-            <p>Processing your data... This may take several minutes depending on the number of companies.</p>
-            <p id="progressText">Starting analysis...</p>
+            <p>Preparing your data for processing...</p>
+        </div>
+        
+        <div id="jobStatus">
+            <h3>Processing Status</h3>
+            <p id="statusText">Analyzing company data...</p>
+            <p id="completedCount">Completed: 0 of 0 companies</p>
+            
+            <div class="status-bar">
+                <div class="progress-text">0%</div>
+                <div id="progressBar"></div>
+            </div>
+            
+            <p id="estimatedTime">Estimated time remaining: Calculating...</p>
+            <!-- <p class="small-text">Auto-refreshing every 3 seconds</p> -->
+            
+            <button id="downloadResultsBtn" onclick="downloadResults()" style="display:none;">Download Results</button>
         </div>
         
         <div id="completion">
             <h2>Processing Complete!</h2>
-            <p>Your file has been processed successfully and the results have been downloaded.</p>
-            <p>The downloaded CSV contains the sitemap analysis and AI-generated insights for each company.</p>
-            <button onclick="resetForm()">Process Another File</button>
+            <p>Your file has been processed successfully.</p>
+            <p>You can download the CSV containing sitemap analysis and AI-generated insights for each company.</p>
+            <div id="downloadButtons">
+                <button onclick="downloadResults()">Download Results</button>
+            </div>
+            <button onclick="resetForm()" style="margin-top: 20px;">Process Another File</button>
         </div>
         
         <div id="errorMessage" class="error-message"></div>
     </div>
 
     <script>
-        // Handle form submission in a way that allows us to show the completion screen
+        // Store job IDs and processing data
+        let currentJobIds = [];
+        let totalJobs = 0;
+        let completedJobs = 0;
+        let statusCheckInterval = null;
+        let startTime = null;
+        
+        // Function to download template CSV
+        function downloadTemplate() {
+            const csvContent = "data:text/csv;charset=utf-8,Company,Website\nExample Inc,example.com\nTest Company,testcompany.com";
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "sitemap_analyzer_template.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // Handle form submission
         document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
             if (!validateForm()) {
-                e.preventDefault();
                 return false;
             }
             
-            // Show loading
+            // Show loading spinner
             document.getElementById('mainContent').style.display = 'none';
             document.getElementById('loading').style.display = 'block';
             
-            // Set up progress messages
-            startProgressMessages();
-            
-            // Use AJAX for form submission to handle the completion screen
-            e.preventDefault();
-            
             const formData = new FormData(this);
-            const xhr = new XMLHttpRequest();
+            startTime = new Date();
             
+            // Submit the form data
+            const xhr = new XMLHttpRequest();
             xhr.open('POST', '/process', true);
+            xhr.responseType = 'json'; // Expect JSON response
             
             xhr.onload = function() {
                 if (xhr.status === 200) {
-                    // Create a temporary link to download the file
-                    const blob = new Blob([xhr.response], { type: 'text/csv' });
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = url;
-                    a.download = 'sitemap_analysis_results.csv';
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    
-                    // Hide loading and show completion screen
-                    document.getElementById('loading').style.display = 'none';
-                    document.getElementById('completion').style.display = 'block';
+                    // Handle the JSON response with job IDs
+                    handleJobResponse(xhr.response);
                 } else {
-                    // Handle error
-                    document.getElementById('loading').style.display = 'none';
-                    document.getElementById('mainContent').style.display = 'block';
-                    
-                    const errorMessage = document.getElementById('errorMessage');
-                    errorMessage.textContent = "An error occurred while processing your file. Please try again.";
-                    errorMessage.style.display = "block";
+                    handleError("An error occurred while processing your file. Please try again.");
                 }
             };
             
             xhr.onerror = function() {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('mainContent').style.display = 'block';
-                
-                const errorMessage = document.getElementById('errorMessage');
-                errorMessage.textContent = "A network error occurred. Please check your connection and try again.";
-                errorMessage.style.display = "block";
+                handleError("A network error occurred. Please check your connection and try again.");
             };
             
-            xhr.responseType = 'blob';
             xhr.send(formData);
         });
+        
+        function handleJobResponse(response) {
+            if (response && response.job_ids) {
+                // Store job IDs for status checking
+                currentJobIds = response.job_ids;
+                totalJobs = currentJobIds.length;
+                completedJobs = 0;
+                
+                // Update UI to show job status
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('jobStatus').style.display = 'block';
+                document.getElementById('completedCount').textContent = `Completed: ${completedJobs} of ${totalJobs} companies`;
+                updateProgressBar(0);
+                
+                // Start periodic status checking
+                if (statusCheckInterval) {
+                    clearInterval(statusCheckInterval);
+                }
+                
+                // Check immediately
+                checkJobStatus();
+                
+                // Then set up interval for checking (every 3 seconds)
+                statusCheckInterval = setInterval(checkJobStatus, 3000);
+            } else {
+                handleError("Invalid server response. Please try again.");
+            }
+        }
+        
+        function handleError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('jobStatus').style.display = 'none';
+            document.getElementById('mainContent').style.display = 'block';
+            
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = message;
+            errorMessage.style.display = "block";
+            
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+            }
+        }
+        
+        function checkJobStatus() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/status', true);
+            xhr.responseType = 'json';
+            
+            xhr.onload = function() {
+                if (xhr.status === 200 && xhr.response) {
+                    updateJobStatus(xhr.response);
+                } else {
+                    console.error("Error checking job status");
+                }
+            };
+            
+            xhr.onerror = function() {
+                console.error("Network error while checking job status");
+            };
+            
+            xhr.send();
+        }
+        
+        function updateProgressBar(percentage) {
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.querySelector('.progress-text');
+            
+            progressBar.style.width = `${percentage}%`;
+            progressText.textContent = `${Math.round(percentage)}%`;
+            
+            // Change color based on progress
+            if (percentage < 30) {
+                progressBar.style.backgroundColor = '#ff9800'; // Orange for early progress
+            } else if (percentage < 70) {
+                progressBar.style.backgroundColor = '#2196F3'; // Blue for mid progress
+            } else {
+                progressBar.style.backgroundColor = '#4CAF50'; // Green for near completion
+            }
+        }
+        
+        function updateEstimatedTime(completed, total) {
+            if (completed === 0 || !startTime) {
+                document.getElementById('estimatedTime').textContent = 'Estimated time remaining: Calculating...';
+                return;
+            }
+            
+            const now = new Date();
+            const elapsedSeconds = (now - startTime) / 1000;
+            const secondsPerJob = elapsedSeconds / completed;
+            const remainingJobs = total - completed;
+            const remainingSeconds = secondsPerJob * remainingJobs;
+            
+            let timeText = 'Estimated time remaining: ';
+            
+            if (remainingSeconds < 60) {
+                timeText += 'Less than a minute';
+            } else if (remainingSeconds < 3600) {
+                const minutes = Math.round(remainingSeconds / 60);
+                timeText += `About ${minutes} minute${minutes > 1 ? 's' : ''}`;
+            } else {
+                const hours = Math.floor(remainingSeconds / 3600);
+                const minutes = Math.round((remainingSeconds % 3600) / 60);
+                timeText += `About ${hours} hour${hours > 1 ? 's' : ''} and ${minutes} minute${minutes > 1 ? 's' : ''}`;
+            }
+            
+            document.getElementById('estimatedTime').textContent = timeText;
+        }
+        
+        function updateJobStatus(allStatus) {
+            if (!allStatus) return;
+            
+            completedJobs = 0;
+            let hasErrors = false;
+            
+            // Count completed jobs
+            for (const jobId of currentJobIds) {
+                if (allStatus[jobId]) {
+                    if (allStatus[jobId].status === 'complete') {
+                        completedJobs++;
+                    } else if (allStatus[jobId].status === 'error') {
+                        hasErrors = true;
+                        completedJobs++; // Count errors as completed
+                    }
+                }
+            }
+            
+            // Update status display
+            document.getElementById('completedCount').textContent = `Completed: ${completedJobs} of ${totalJobs} companies`;
+            
+            // Update progress bar
+            const progressPercentage = totalJobs > 0 ? (completedJobs / totalJobs) * 100 : 0;
+            updateProgressBar(progressPercentage);
+            
+            // Update estimated time remaining
+            updateEstimatedTime(completedJobs, totalJobs);
+            
+            // Show download button if all complete
+            if (completedJobs === totalJobs) {
+                if (statusCheckInterval) {
+                    clearInterval(statusCheckInterval);
+                }
+                
+                document.getElementById('statusText').textContent = "All jobs completed! You can now download the results.";
+                document.getElementById('downloadResultsBtn').style.display = 'block';
+                document.getElementById('estimatedTime').textContent = ''; // Clear the estimated time
+                
+                // Show completion screen instead of job status
+                document.getElementById('jobStatus').style.display = 'none';
+                document.getElementById('completion').style.display = 'block';
+                document.getElementById('downloadButtons').style.display = 'block';
+                
+                if (hasErrors) {
+                    const completionMessage = document.querySelector('#completion p:nth-child(2)');
+                    completionMessage.textContent = "Processing complete. Some companies may have errors, but all available results are ready for download.";
+                }
+            } else {
+                const remainingJobs = totalJobs - completedJobs;
+                document.getElementById('statusText').textContent = `Processing... ${remainingJobs} ${remainingJobs === 1 ? 'company' : 'companies'} remaining.`;
+                document.getElementById('downloadResultsBtn').style.display = 'none';
+            }
+        }
+        
+        function downloadResults() {
+            window.location.href = '/results';
+        }
         
         function validateForm() {
             const fileInput = document.getElementById('file');
@@ -250,50 +484,54 @@
             return true;
         }
         
-        function validateAndSubmit() {
-            // This function is used by the original onsubmit handler
-            // We've replaced it with the event listener above, but keeping 
-            // this for backwards compatibility
-            return validateForm();
-        }
-        
-        function startProgressMessages() {
-            const progressText = document.getElementById('progressText');
-            const messages = [
-                "Reading the CSV file...",
-                "Preparing to scrape websites...",
-                "Scraping website links...",
-                "Analyzing sitemaps...",
-                "Generating AI insights...",
-                "Preparing results...",
-                "Almost done..."
-            ];
-            
-            let i = 0;
-            const progressInterval = setInterval(() => {
-                if (i < messages.length) {
-                    progressText.textContent = messages[i];
-                    i++;
-                } else {
-                    clearInterval(progressInterval);
-                }
-            }, 8000);
-            
-            // Store the interval ID so we can clear it if needed
-            window.progressInterval = progressInterval;
-        }
-        
         function resetForm() {
             // Clear the file input
             document.getElementById('file').value = '';
             
-            // Hide completion screen and show the main content
+            // Reset UI states
             document.getElementById('completion').style.display = 'none';
+            document.getElementById('jobStatus').style.display = 'none';
             document.getElementById('mainContent').style.display = 'block';
-            
-            // Clear any existing error message
             document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('downloadButtons').style.display = 'none';
+            updateProgressBar(0);
+            
+            // Reset job tracking
+            currentJobIds = [];
+            totalJobs = 0;
+            completedJobs = 0;
+            startTime = null;
+            
+            // Clear interval
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+                statusCheckInterval = null;
+            }
         }
+        
+        // Health check on page load
+        window.addEventListener('load', function() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/health', true);
+            xhr.responseType = 'json';
+            
+            xhr.onload = function() {
+                if (xhr.status === 200 && xhr.response) {
+                    const health = xhr.response;
+                    // Only show warning if services have issues
+                    if (health.mongo !== 'OK' || health.ai_service !== 'OK') {
+                        const warningBox = document.querySelector('.warning-box');
+                        const serviceWarning = document.createElement('p');
+                        serviceWarning.style.color = '#856404';
+                        serviceWarning.style.fontWeight = 'bold';
+                        serviceWarning.textContent = 'Some services may be experiencing issues. Results might be delayed.';
+                        warningBox.appendChild(serviceWarning);
+                    }
+                }
+            };
+            
+            xhr.send();
+        });
     </script>
 </body>
 </html>

@@ -5,6 +5,19 @@ import random
 from urllib.parse import urljoin, urlparse
 import time
 import threading
+import concurrent.futures
+import itertools
+
+# Add Session for connecting pooling
+# Create a connection pool
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=10,
+    pool_maxsize=10,
+    max_retries=3
+)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
 
 def extract_sitemap(url, max_total_time=20):
 
@@ -33,7 +46,12 @@ def extract_sitemap(url, max_total_time=20):
         '/sitemap.xml',
         '/sitemaps.xml',
         '/sitemap_index.xml',
-        '/sitemap-index.xml'
+        '/sitemap-index.xml',
+        '/wp-sitemap.xml',
+        '/site-map.xml',
+        '/sitemap.php',
+        '/sitemap.txt',
+        '/sitemap/sitemap.xml'
     ]
     
     headers = {
@@ -71,28 +89,29 @@ def extract_sitemap(url, max_total_time=20):
         
         # If no sitemap found in robots.txt, try common locations
         if not sitemap_found:
-            for path in sitemap_paths:
-                try:
-                    # Check if we've already spent too much time
-                    if time.time() - start_time >= max_total_time * 0.7:  # 70% of allowed time
-                        return
-                        
-                    sitemap_url = f"{base_domain}{path}"
-                    print(f"Trying sitemap at: {sitemap_url}")
-                    
-                    urls = process_sitemap(sitemap_url, headers, start_time, max_total_time)
-                    if urls:
-                        all_urls.extend(urls)
-                        sitemap_found = True
-                        return  # Early return if we found URLs
-                except Exception as e:
-                    print(f"Error checking {sitemap_url}: {str(e)}")
-        
+            # USE CONCURRENT PROCESSING
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_path = {
+                    executor.submit(try_sitemap_path, base_domain, path, headers, start_time, max_total_time): path
+                    for path in sitemap_paths
+                }
+
+                for future in concurrent.futures.as_completed(future_to_path):
+                    path = future_to_path[future]
+                    try:
+                        urls = future.result()
+                        if urls:
+                            all_urls.extend(urls)
+                            sitemap_found = True
+                            break  # Early break if we found URLs
+                    except Exception as e:
+                        print(f"Error checking sitemap path {path}: {str(e)}")
+       
         # If still no sitemap found, fall back to HTML scraping (but only if we have time)
         if not sitemap_found and time.time() - start_time < max_total_time * 0.8:  # 80% of allowed time
             try:
                 print(f"No XML sitemap found, falling back to HTML scraping for: {base_domain}")
-                response = requests.get(base_domain, timeout=2, headers=headers)
+                response = session.get(base_domain, timeout=2, headers=headers)
                 
                 # Parse HTML
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -118,6 +137,17 @@ def extract_sitemap(url, max_total_time=20):
             except Exception as e:
                 print(f"Error with HTML fallback scraping {base_domain}: {str(e)}")
     
+    # Helper Function
+    def try_sitemap_path(base_domain, path, headers, start_time, max_total_time):
+        # Check if we've already spent too much time
+        if time.time() - start_time >= max_total_time * 0.7:  # 70% of allowed time
+            return []
+        
+        sitemap_url = f"{base_domain}{path}"
+        print(f"Trying sitemap at: {sitemap_url}")
+
+        return process_sitemap(sitemap_url, headers, start_time, max_total_time)
+
     # Create and start the worker thread
     worker_thread = threading.Thread(target=extraction_worker)
     worker_thread.daemon = True
@@ -147,7 +177,7 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
     
     try:
         # Use shorter timeout for individual requests
-        response = requests.get(sitemap_url, timeout=2, headers=headers)
+        response = session.get(sitemap_url, timeout=2, headers=headers)
         
         content_type = response.headers.get('Content-Type', '')
         
@@ -169,17 +199,27 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
                 
                 # Find all sitemap URLs in the index (limit to first 3 for speed)
                 count = 0
-                for sitemap in root.findall('.//sm:sitemap/sm:loc', ns) or root.findall('.//sitemap/loc'):
-                    # Check time again before processing each child sitemap
-                    if time.time() - start_time >= max_total_time * 0.8 or count >= 3:
-                        break
-                        
-                    child_sitemap_url = sitemap.text.strip()
-                    # Recursively process child sitemaps
-                    child_urls = process_sitemap(child_sitemap_url, headers, start_time, max_total_time)
-                    if child_urls:
-                        urls.extend(child_urls)
-                    count += 1
+                sitemap_locs = root.findall('.//sm:sitemap/sm;loc', ns) or root.findall(".//sitemap/loc")
+
+                # PROCESS CHILD SITEMAPS CONCURRENTLY
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    future_to_url = {}
+
+                    for sitemap in sitemap_locs[:3]:
+                        child_sitemap_url = sitemap.text.strip()
+                        future = executor.submit(
+                            process_sitemap, child_sitemap_url, headers, start_time, max_total_time
+                        )
+                        future_to_url[future] = child_sitemap_url
+                    
+                    for future in concurrent.futures.as_completed(future_to_url):
+                        child_urls = future.result()
+                        if child_urls:
+                            urls.extend(child_urls)
+
+                        if time.time() - start_time >= max_total_time * 0.9:
+                            break
+                
             except ET.ParseError:
                 # If XML parsing fails, try to extract URLs using string methods
                 count = 0
