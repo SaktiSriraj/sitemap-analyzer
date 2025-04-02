@@ -61,9 +61,12 @@ def extract_sitemap(url, max_total_time=20):
         'Connection': 'close',  # Don't keep connections open
     }
     
+    # Track URLs we've seen to avoid duplicates
+    seen_urls = set()
+    
     # Use a thread to enforce hard timeout
     def extraction_worker():
-        nonlocal all_urls
+        nonlocal all_urls, seen_urls
         sitemap_found = False
         
         # First try robots.txt to find sitemap with shorter timeout
@@ -81,7 +84,11 @@ def extract_sitemap(url, max_total_time=20):
                         # Process this sitemap
                         urls = process_sitemap(sitemap_url, headers, start_time, max_total_time)
                         if urls:
-                            all_urls.extend(urls)
+                            # Add only unique URLs
+                            for url in urls:
+                                if url not in seen_urls:
+                                    all_urls.append(url)
+                                    seen_urls.add(url)
                             sitemap_found = True
                             return  # Early return if we found URLs
         except Exception as e:
@@ -101,7 +108,11 @@ def extract_sitemap(url, max_total_time=20):
                     try:
                         urls = future.result()
                         if urls:
-                            all_urls.extend(urls)
+                            # Add only unique URLs
+                            for url in urls:
+                                if url not in seen_urls:
+                                    all_urls.append(url)
+                                    seen_urls.add(url)
                             sitemap_found = True
                             break  # Early break if we found URLs
                     except Exception as e:
@@ -129,8 +140,9 @@ def extract_sitemap(url, max_total_time=20):
                     full_url = urljoin(base_domain, href)
                     
                     # Only include links from the same domain
-                    if urlparse(full_url).netloc == parsed_url.netloc:
+                    if urlparse(full_url).netloc == parsed_url.netloc and full_url not in seen_urls:
                         all_urls.append(full_url)
+                        seen_urls.add(full_url)
                         link_count += 1
                         if link_count >= 100:  # Limit to first 100 links for speed
                             break
@@ -161,7 +173,7 @@ def extract_sitemap(url, max_total_time=20):
         print(f"Extraction timed out after {max_total_time} seconds")
     
     # Return unique URLs, limited to 500 if there are too many
-    unique_urls = list(set(all_urls))
+    unique_urls = list(seen_urls)
     if len(unique_urls) > 500:
         print(f"Limiting results from {len(unique_urls)} to 500 URLs")
         return unique_urls[:500]
@@ -174,6 +186,7 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
         return []
         
     urls = []
+    seen_urls = set()  # Track URLs we've seen to avoid duplicates
     
     try:
         # Use shorter timeout for individual requests
@@ -215,7 +228,10 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
                     for future in concurrent.futures.as_completed(future_to_url):
                         child_urls = future.result()
                         if child_urls:
-                            urls.extend(child_urls)
+                            for url in child_urls:
+                                if url not in seen_urls:
+                                    urls.append(url)
+                                    seen_urls.add(url)
 
                         if time.time() - start_time >= max_total_time * 0.9:
                             break
@@ -232,10 +248,14 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
                             if child_url.endswith('.xml'):
                                 child_urls = process_sitemap(child_url, headers, start_time, max_total_time)
                                 if child_urls:
-                                    urls.extend(child_urls)
+                                    for url in child_urls:
+                                        if url not in seen_urls:
+                                            urls.append(url)
+                                            seen_urls.add(url)
                                 count += 1
-                            else:
+                            elif child_url not in seen_urls:
                                 urls.append(child_url)
+                                seen_urls.add(child_url)
                     
         # Process as regular sitemap
         elif '<urlset' in response.text:
@@ -249,11 +269,18 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
                 # Find all page URLs (limit to first 100 for speed)
                 count = 0
                 for url_element in root.findall('.//sm:url/sm:loc', ns) or root.findall('.//url/loc'):
-                    page_url = url_element.text.strip()
-                    urls.append(page_url)
-                    count += 1
-                    if count >= 100:
+                    if count >= 100:  # Limit to first 100 URLs for speed
                         break
+                    url = url_element.text.strip()
+                    if url not in seen_urls:
+                        urls.append(url)
+                        seen_urls.add(url)
+                        count += 1
+                    
+                    # Check time limit
+                    if time.time() - start_time >= max_total_time * 0.9:  # 90% of allowed time
+                        break
+                        
             except ET.ParseError:
                 # If XML parsing fails, try to extract URLs using string methods
                 count = 0
@@ -262,19 +289,15 @@ def process_sitemap(sitemap_url, headers, start_time, max_total_time):
                         start_idx = line.find('<loc>') + 5
                         end_idx = line.find('</loc>')
                         if start_idx < end_idx:
-                            urls.append(line[start_idx:end_idx].strip())
-                            count += 1
-                            if count >= 100:
-                                break
-                
-    except requests.exceptions.RequestException as e:
-        print(f"Request error processing sitemap {sitemap_url}: {str(e)}")
-        return []
+                            url = line[start_idx:end_idx].strip()
+                            if url not in seen_urls:
+                                urls.append(url)
+                                seen_urls.add(url)
+                                count += 1
+                                if count >= 100:  # Limit to first 100 URLs
+                                    break
+                                
     except Exception as e:
         print(f"Error processing sitemap {sitemap_url}: {str(e)}")
-        return []
-    
-    # Limit the number of URLs to prevent memory issues
-    if len(urls) > 200:
-        return urls[:200]
+        
     return urls

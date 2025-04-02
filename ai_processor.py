@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from functools import wraps
 import time
 import concurrent.futures
+import hashlib
 
 # load the .env file
 load_dotenv()
@@ -45,9 +46,21 @@ class CircuitBreaker:
 # Create AI Circuit Breaker
 ai_circuit_breaker = CircuitBreaker(max_failures=3, reset_timeout=300)
 
+# Cache for AI results to avoid duplicate processing
+ai_results_cache = {}
+
 # Helper Function to Analyze Sitemap with AI
 def _do_analyze(company_name, sitemap_urls):
     time.sleep(0.5)
+    
+    # Create a hash of the input to enable caching
+    input_hash = hashlib.md5(f"{company_name}:{','.join(sitemap_urls[:100])}".encode()).hexdigest()
+    
+    # Check if we have a cached result
+    if input_hash in ai_results_cache:
+        print(f"Using cached AI result for {company_name}")
+        return ai_results_cache[input_hash]
+        
     sitemap_text = "\n".join(sitemap_urls)
 
     prompt = f"""You are analyzing a company's online presence based on its sitemap. Below is a list of all the URLs found on the company's website:
@@ -64,11 +77,16 @@ def _do_analyze(company_name, sitemap_urls):
         # Generate content using Gemini
         response = model.generate_content(prompt)
         # Extract and return the AI-generated insight
-        return response.text
+        result = response.text
+        
+        # Cache the result
+        ai_results_cache[input_hash] = result
+        
+        return result
     except Exception as e:
-        error_message =  f"Error generating AI insights: {str(e)}"
+        error_message = f"Error generating AI insights: {str(e)}"
         print(error_message)
-    return f"Error: {error_message}. Please try again later."
+        return f"Error: {error_message}. Please try again later."
 
 @ai_circuit_breaker
 def analyze_sitemap_with_ai(company_name, sitemap_urls, timeout=60):

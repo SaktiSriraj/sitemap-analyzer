@@ -6,7 +6,7 @@ import time
 from dotenv import load_dotenv
 from scraper import extract_sitemap
 from ai_processor import analyze_sitemap_with_ai
-from database import init_db, store_company_data, get_company_data
+from database import init_db, store_company_data, get_company_data, reset_database
 
 import threading
 import queue
@@ -76,6 +76,9 @@ def process_csv(csv_file, async_mode=True):
     chunk_size = 10
     output_data = []
     job_ids = []
+    
+    # Keep track of unique companies to avoid duplicates
+    unique_companies = set()
 
     # Find column names first by reading just the header
     header_df = pd.read_csv(csv_file, nrows=0)
@@ -112,8 +115,25 @@ def process_csv(csv_file, async_mode=True):
     # Chunk processing
     for chunk in pd.read_csv(csv_file, chunksize=chunk_size):
         for _, row in chunk.iterrows():
-            company_name = row[company_col]
-            website_url = row[website_col]
+            company_name = row[company_col].strip() if isinstance(row[company_col], str) else str(row[company_col])
+            website_url = row[website_col].strip() if isinstance(row[website_col], str) else str(row[website_col])
+            
+            # Check for empty values
+            if not company_name or not website_url:
+                continue
+                
+            # Normalize website URL
+            if not website_url.startswith(('http://', 'https://')):
+                website_url = 'https://' + website_url
+                
+            # Create a unique key for deduplication
+            unique_key = f"{company_name.lower()}:{website_url.lower()}"
+            
+            # Skip if we've already processed this company+website combination
+            if unique_key in unique_companies:
+                continue
+                
+            unique_companies.add(unique_key)
 
             if async_mode:
                 # Queue for async processing
@@ -148,9 +168,25 @@ def job_status(job_id):
 def get_results():
     # Check if all jobs are complete
     completed_results = []
+    
+    # Create a dictionary to deduplicate results by company name
+    company_results = {}
+    
     for job_id, result in results.items():
         if result['status'] == 'complete' and 'data' in result:
-            completed_results.append(result['data'])
+            # Use company_name as unique key
+            company_name = result['data']['Company']
+            
+            # If company already exists with older data, update it
+            if company_name in company_results:
+                # Keep the most recent result (assumes job_id is roughly chronological)
+                # In a more robust system, you might want to compare timestamps
+                company_results[company_name] = result['data']
+            else:
+                company_results[company_name] = result['data']
+    
+    # Convert dictionary values to list
+    completed_results = list(company_results.values())
     
     # Create output CSV
     output_df = pd.DataFrame(completed_results)
@@ -218,6 +254,12 @@ def upload_file():
     
     if file and file.filename.endswith('.csv'):
         try:
+            # Clear the Database
+            reset_database()
+
+            # Clear any existing results
+            results.clear()
+
             # Process the CSV and get job IDs
             output_data, job_ids = process_csv(file, async_mode=True)
             
